@@ -39,15 +39,18 @@ async def search_youtube(query: str) -> List[dict]:
     """
     def _search():
         try:
-            from pytubefix import Search
-            s = Search(query, use_po_token=True)
+            from youtubesearchpython import VideosSearch
+            videosSearch = VideosSearch(query, limit=5)
+            result_data = videosSearch.result()
+            
             results = []
-            for v in s.videos[:5]:
-                results.append({
-                    'id': v.video_id,
-                    'title': v.title,
-                    'uploader': getattr(v, 'author', 'Noma\'lum')
-                })
+            if 'result' in result_data:
+                for v in result_data['result']:
+                    results.append({
+                        'id': v.get('id'),
+                        'title': v.get('title'),
+                        'uploader': v.get('channel', {}).get('name', 'Noma\'lum')
+                    })
             return results
         except Exception as e:
             logging.error(f"Search exception: {e}")
@@ -75,7 +78,7 @@ async def download_audio(video_id: str, progress_hook=None) -> dict[str, Any]:
 
         try:
             from pytubefix import YouTube
-            yt = YouTube(url, 'WEB', use_po_token=True, on_progress_callback=on_progress)
+            yt = YouTube(url, client='ANDROID', on_progress_callback=on_progress)
             audio_stream = yt.streams.get_audio_only()
             if not audio_stream:
                 return None

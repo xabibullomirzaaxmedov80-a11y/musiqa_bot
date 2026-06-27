@@ -1,5 +1,6 @@
 aiogram==3.4.1
 pytubefix
+youtube-search-python
 asyncio
 python-dotenv
 aiohttp
