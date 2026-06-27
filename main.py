@@ -18,7 +18,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 
-import yt_dlp
+from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
@@ -35,51 +35,61 @@ logging.basicConfig(level=logging.INFO)
 
 async def search_youtube(query: str) -> List[dict]:
     """
-    Search YouTube and return a list of top 5 results.
+    Search YouTube and return a list of top 5 results using pytubefix.
     """
-    ydl_opts = {
-        'extract_flat': True,
-        'quiet': True,
-        'default_search': 'ytsearch5',
-    }
     def _search():
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch5:{query}", download=False)
-            if 'entries' in info:
-                return info['entries']
+        try:
+            from pytubefix import Search
+            s = Search(query)
+            results = []
+            for v in s.videos[:5]:
+                results.append({
+                    'id': v.video_id,
+                    'title': v.title,
+                    'uploader': getattr(v, 'author', 'Noma\'lum')
+                })
+            return results
+        except Exception as e:
+            logging.error(f"Search exception: {e}")
             return []
     return await asyncio.to_thread(_search)
 
 async def download_audio(video_id: str, progress_hook=None) -> dict[str, Any]:
     """
-    Download the audio for a specific video ID.
+    Download the audio for a specific video ID using pytubefix.
     """
     temp_dir = tempfile.mkdtemp()
     
-    ydl_opts = {
-        'format': 'bestaudio[ext=m4a]/bestaudio/best',
-        'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
-        'noplaylist': True,
-        'quiet': True,
-        'nocolor': True,
-        'extractor_args': {'youtube': {'player_client': ['default', 'web_embedded', 'ios', 'tv']}}
-    }
-    
-    if progress_hook:
-        ydl_opts['progress_hooks'] = [progress_hook]
-
-    
     def _download():
         url = f"https://www.youtube.com/watch?v={video_id}"
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            files = os.listdir(temp_dir)
-            if len(files) > 0:
-                downloaded_file = files[0]
-                return {
-                    'filepath': os.path.join(temp_dir, downloaded_file),
-                    'title': info.get('title', 'Unknown Title'),
-                }
+        
+        def on_progress(stream, chunk, bytes_remaining):
+            if progress_hook:
+                try:
+                    total_size = stream.filesize
+                    bytes_downloaded = total_size - bytes_remaining
+                    percent = int(bytes_downloaded / total_size * 100)
+                    progress_hook({'status': 'downloading', '_percent_str': f"{percent}%"})
+                except Exception:
+                    pass
+
+        try:
+            from pytubefix import YouTube
+            yt = YouTube(url, 'WEB', on_progress_callback=on_progress)
+            audio_stream = yt.streams.get_audio_only()
+            if not audio_stream:
+                return None
+            
+            filepath = audio_stream.download(output_path=temp_dir)
+            if progress_hook:
+                progress_hook({'status': 'finished'})
+                
+            return {
+                'filepath': filepath,
+                'title': yt.title,
+            }
+        except Exception as e:
+            logging.error(f"Download exception: {e}")
             return None
             
     return await asyncio.to_thread(_download)
