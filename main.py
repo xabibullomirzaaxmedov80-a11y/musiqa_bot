@@ -62,6 +62,7 @@ async def download_audio(video_id: str, progress_hook=None) -> dict[str, Any]:
         'noplaylist': True,
         'quiet': True,
         'nocolor': True,
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}}
     }
     
     if progress_hook:
