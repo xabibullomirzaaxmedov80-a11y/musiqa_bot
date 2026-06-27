@@ -231,6 +231,19 @@ async def inline_query_handler(inline_query: InlineQuery, bot: Bot):
     await inline_query.answer(results, cache_time=60, is_personal=False)
 
 async def main() -> None:
+    # Render Free Tier uchun oddiy web server (Portni band qilish uchun)
+    from aiohttp import web
+    async def handle(request):
+        return web.Response(text="Bot is running!")
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logging.info(f"Dummy web server started on port {port}")
+    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
