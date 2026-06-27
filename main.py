@@ -2,11 +2,19 @@ import asyncio
 import logging
 import os
 import tempfile
+import re
 from typing import Any, List
 
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import CommandStart, Command
-from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.filters import CommandStart, Command, CommandObject
+from aiogram.types import (
+    FSInputFile, 
+    InlineKeyboardButton, 
+    InlineKeyboardMarkup,
+    InlineQuery,
+    InlineQueryResultArticle,
+    InputTextMessageContent
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 
@@ -42,7 +50,7 @@ async def search_youtube(query: str) -> List[dict]:
             return []
     return await asyncio.to_thread(_search)
 
-async def download_audio(video_id: str) -> dict[str, Any]:
+async def download_audio(video_id: str, progress_hook=None) -> dict[str, Any]:
     """
     Download the audio for a specific video ID.
     """
@@ -53,7 +61,12 @@ async def download_audio(video_id: str) -> dict[str, Any]:
         'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
         'noplaylist': True,
         'quiet': True,
+        'nocolor': True,
     }
+    
+    if progress_hook:
+        ydl_opts['progress_hooks'] = [progress_hook]
+
     
     def _download():
         url = f"https://www.youtube.com/watch?v={video_id}"
@@ -72,7 +85,13 @@ async def download_audio(video_id: str) -> dict[str, Any]:
 
 
 @dp.message(CommandStart())
-async def command_start_handler(message: types.Message) -> None:
+async def command_start_handler(message: types.Message, command: CommandObject = None) -> None:
+    if command and command.args and command.args.startswith("dl_"):
+        video_id = command.args[3:]
+        status_msg = await message.answer("⏳ Musiqa yuklash boshlanmoqda... 0%")
+        await execute_download(message.chat.id, status_msg, video_id)
+        return
+
     await message.answer(f"Salom, {message.from_user.full_name}! 🎧\nMusiqa izlash uchun qo'shiq nomini yozing, men sizga variantlar taqdim etaman.")
 
 @dp.message(Command("help"))
@@ -115,17 +134,47 @@ async def process_music_search(message: types.Message) -> None:
 @dp.callback_query(F.data.startswith("dl_"))
 async def process_download_callback(callback: types.CallbackQuery):
     video_id = callback.data[3:]
-    await callback.message.edit_text("⏳ Musiqa yuklab olinmoqda... Iltimos kuting.")
-    
+    await callback.message.edit_text("⏳ Musiqa yuklash boshlanmoqda... 0%")
+    await execute_download(callback.message.chat.id, callback.message, video_id)
     try:
-        result = await download_audio(video_id)
+        await callback.answer()
+    except Exception:
+        pass
+
+async def execute_download(chat_id: int, status_message: types.Message, video_id: str):
+    progress_state = {'percent': '0%', 'status': 'starting'}
+    def hook(d):
+        if d['status'] == 'downloading':
+            percent = d.get('_percent_str', '0%').strip()
+            # Clean ANSI colors if any are left
+            clean_percent = re.sub(r'\x1b\[[0-9;]*m', '', percent)
+            progress_state['percent'] = clean_percent
+            progress_state['status'] = 'downloading'
+        elif d['status'] == 'finished':
+            progress_state['status'] = 'finished'
+
+    download_task = asyncio.create_task(download_audio(video_id, hook))
+    
+    last_percent = ""
+    while not download_task.done():
+        await asyncio.sleep(2)
+        if progress_state['status'] == 'downloading' and progress_state['percent'] != last_percent:
+            try:
+                await status_message.edit_text(f"⏳ Musiqa yuklab olinmoqda... {progress_state['percent']}")
+                last_percent = progress_state['percent']
+            except Exception:
+                pass
+                
+    try:
+        result = await download_task
         if result and 'filepath' in result:
             filepath = result['filepath']
             title = result['title']
             
             audio = FSInputFile(filepath)
+            await status_message.edit_text("⏳ Fayl Telegramga jo'natilmoqda...")
             await bot.send_audio(
-                chat_id=callback.message.chat.id,
+                chat_id=chat_id,
                 audio=audio,
                 title=title,
                 caption="🎵 Musiqa Bot orqali yuklandi!"
@@ -136,14 +185,50 @@ async def process_download_callback(callback: types.CallbackQuery):
             except Exception as e:
                 logging.error(f"Failed to delete {filepath}: {e}")
                 
-            await callback.message.delete()
+            await status_message.delete()
         else:
-            await callback.message.edit_text("❌ Musiqani yuklashda xatolik yuz berdi.")
+            await status_message.edit_text("❌ Musiqani yuklashda xatolik yuz berdi.")
     except Exception as e:
         logging.error(f"Download error: {e}")
-        await callback.message.edit_text("⚠️ Yuklab olishda xatolik yuz berdi.")
+        await status_message.edit_text("⚠️ Yuklab olishda xatolik yuz berdi.")
+
+@dp.inline_query()
+async def inline_query_handler(inline_query: InlineQuery, bot: Bot):
+    query = inline_query.query.strip()
+    if not query:
+        return
+        
+    results_list = await search_youtube(query)
+    bot_info = await bot.get_me()
     
-    await callback.answer()
+    results = []
+    for idx, entry in enumerate(results_list):
+        video_id = entry.get('id')
+        title = entry.get('title', 'Noma\'lum')
+        channel = entry.get('uploader', '')
+        
+        dl_url = f"https://t.me/{bot_info.username}?start=dl_{video_id}"
+        
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬇️ Yuklab olish", url=dl_url)]
+        ])
+        
+        content = InputTextMessageContent(
+            message_text=f"🎵 {title}\n👤 {channel}"
+        )
+        
+        results.append(
+            InlineQueryResultArticle(
+                id=video_id,
+                title=title,
+                description=channel,
+                input_message_content=content,
+                reply_markup=markup,
+                thumbnail_url=f"https://img.youtube.com/vi/{video_id}/default.jpg"
+            )
+        )
+        
+    await inline_query.answer(results, cache_time=60, is_personal=False)
 
 async def main() -> None:
     await dp.start_polling(bot)
