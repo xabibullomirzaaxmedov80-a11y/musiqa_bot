@@ -40,7 +40,7 @@ async def search_youtube(query: str) -> List[dict]:
     def _search():
         try:
             from pytubefix import Search
-            s = Search(query)
+            s = Search(query, use_po_token=True)
             results = []
             for v in s.videos[:5]:
                 results.append({
@@ -75,7 +75,7 @@ async def download_audio(video_id: str, progress_hook=None) -> dict[str, Any]:
 
         try:
             from pytubefix import YouTube
-            yt = YouTube(url, 'WEB', on_progress_callback=on_progress)
+            yt = YouTube(url, 'WEB', use_po_token=True, on_progress_callback=on_progress)
             audio_stream = yt.streams.get_audio_only()
             if not audio_stream:
                 return None
